@@ -7,6 +7,8 @@ import pandas as pd
 
 from sklearn.linear_model import LinearRegression
 import plotly.express as px
+import geopandas
+import pyproj
 
 current_year = datetime.now().year
 drop_years=[2001,2002]
@@ -96,7 +98,7 @@ def melt_crime_df(
     plot_data = plot_data.dropna()
         
     if place_type == 'Community Area':
-        plot_data[place_type] = community_areas.loc[plot_data[place_type],:]['Name'].values
+        plot_data[place_type] = community_areas.loc[plot_data[place_type],'Name'].values
         
     return plot_data
 
@@ -124,6 +126,32 @@ def get_pop_df(
     
     return df_pop
 
+def get_map_df(tol=0.000025):
+    
+    base_dir = 'C:\\Users\\BatLab\\Documents\\chicago_crime'
+    
+    map_path_name = os.path.join(
+        base_dir,'chicago_maps',
+        'geo_export_b2278e4c-d78c-4246-aa83-acecd85cc43b.shp'
+    )
+
+    map_df = (
+        geopandas.read_file(map_path_name)
+        .assign(**{'Community Area': lambda x: x['community'].str.title()})
+        .replace({'Community Area': {
+            'Mckinley Park': 'McKinley Park',
+            'Ohare': "O'Hare",
+            'Loop': 'The Loop'
+        }})
+        .set_index('Community Area')
+        .to_crs(pyproj.CRS.from_epsg(4326))
+    )
+
+    map_df.geometry = map_df.simplify(tol,preserve_topology=True)
+    
+    return map_df
+    
+    
 def plot_regional_crime(
     plot_data,
     crime_type,
@@ -145,7 +173,9 @@ def plot_regional_crime(
         facet_col='region',
         facet_col_wrap=2,
         height=900,
-        facet_row_spacing=0.04,
+        width=800,
+        facet_row_spacing=0.06,
+        facet_col_spacing=0.08,
         render_mode=render_mode
     )
     fig.update_traces(mode="markers+lines")
@@ -187,11 +217,12 @@ def plot_crime_by_type_and_place(
         facet_col='FBI_type',
         facet_col_wrap=4,
         height=900,
-        width=1000,
+        width=1200,
         facet_row_spacing=0.06,
         facet_col_spacing=0.08,
         render_mode=render_mode
     )
+    fig.update_traces(mode="markers+lines")
     # fig.update_layout(hovermode="x unified")
 
     fig.update_yaxes(matches=None)
@@ -199,4 +230,40 @@ def plot_crime_by_type_and_place(
     fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1].replace('_',' ').title()))
     fig.update_xaxes(tickangle=45)
 
+    return fig
+
+def map_crime_by_place(
+    map_df,
+    plot_data,
+    place_type,
+    crime_type
+):
+    
+    df_chor_map = map_df.merge(
+        plot_data.query('FBI_type == @crime_type'),
+        on=place_type
+    )
+    
+    fig = px.choropleth(
+        df_chor_map.round(decimals=2),
+        geojson=map_df.__geo_interface__,
+        locations=place_type,
+        color='crime_rate',
+        animation_frame='Year',
+        projection='mercator',
+        range_color=df_chor_map['crime_rate'].quantile([0.01,0.99]).to_list(),
+        labels = {
+            'crime_rate': 'Crime Rate',
+            'FBI_type': 'Crime Category',
+            'n_crime': 'Count'
+        },
+        hover_data = {'Year':True,'FBI_type':True,'n_crime':True}
+    )
+    fig.update_layout(
+        coloraxis=dict(colorbar=dict(title="Per 1,000 capita"))
+    )
+    fig.update_geos(fitbounds="locations", visible=False)
+    fig.update_layout(height=500,width=500)
+    fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
+    
     return fig
